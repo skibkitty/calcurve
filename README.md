@@ -1,27 +1,27 @@
 # CalCurve
 
+CalCurve is a Java 21 / Spring Boot 3 REST API that fits analytical calibration curves and converts unknown instrument readings into concentrations. Post your standards (known concentration → response) and get back the least-squares line with slope and intercept uncertainties, R², residual standard deviation, LOD/LOQ, residuals and automated QC flags. Post unknown samples alongside the standards and each comes back as a concentration with its standard deviation, a 95% confidence interval (Student's t), and flags for below-LOD/LOQ or extrapolated results.
+
 [![CI](https://github.com/skibkitty/calcurve/actions/workflows/ci.yml/badge.svg)](https://github.com/skibkitty/calcurve/actions/workflows/ci.yml)
 
-CalCurve is a stateless REST API for analytical chemistry calibration. Post your standards (known concentration → instrument response) and get back the fitted least-squares line with slope and intercept uncertainties, R², residual standard deviation, the limits of detection and quantitation, residuals, and automated QC flags. Post unknown sample readings alongside the standards and each one comes back as a concentration with its standard deviation, a 95% confidence interval (Student's t), and flags for below-LOD/LOQ or extrapolated results. Built with Java 21 and Spring Boot 3, with every statistic tested against NumPy/SciPy reference values.
-
-## Quick start
+## Running it
 
 Requires JDK 21+.
 
 ```bash
-./mvnw spring-boot:run
+mvn spring-boot:run        # or ./mvnw spring-boot:run if Maven isn't installed
 ```
 
-Then open <http://localhost:8080/swagger-ui.html> for interactive docs (OpenAPI JSON at `/v3/api-docs`).
+The API listens on port 8080; set `SERVER_PORT` to use another (e.g. `SERVER_PORT=8095 mvn spring-boot:run`). Interactive docs are at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`.
 
-Or with Docker:
+With Docker:
 
 ```bash
 docker build -t calcurve .
 docker run --rm -p 8080:8080 calcurve
 ```
 
-Run the tests with `./mvnw verify`.
+Run the tests with `mvn verify`.
 
 ## API
 
@@ -103,7 +103,11 @@ The response holds the full `calibration` object shown above, plus:
 ]
 ```
 
-### Errors
+## How it's validated
+
+The statistics are checked in JUnit 5 tests against independently computed reference values for a 7-point fluorescein dataset (the one used in the examples above): slope, intercept, their standard errors, R², s_y/x, LOD/LOQ, residuals, back-calculated concentrations and 95% CI half-widths, plus the Student's t critical value against tabulated values. The reference values were generated with NumPy/SciPy, not by the code under test. Spring Boot MockMvc tests drive the HTTP layer end to end: the example requests above, 6-significant-figure rounding, and the 400/422 problem responses. All 26 tests run on every push via GitHub Actions (`mvn verify`).
+
+## Error handling
 
 All errors are [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `application/problem+json` bodies.
 
@@ -112,12 +116,21 @@ All errors are [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `application/p
 | 400 | Malformed JSON, or a field fails validation (`standards` missing or empty, negative or non-finite concentration, blank or >64-char `sampleId`, empty `responses`) | `errors`: `[{field, message}]` |
 | 422 | A QC rule of ERROR severity fails, or all concentrations are identical | `flags`; `type` is `https://calcurve.dev/problems/<code>`, e.g. `.../too-few-standards` |
 
+```bash
+curl -s http://localhost:8080/api/v1/calibrations \
+  -H 'Content-Type: application/json' \
+  -d '{"analyte": "Fluorescein",
+       "standards": [{"concentration": 0, "response": 2.1},
+                     {"concentration": 2, "response": 5.0}]}'
+```
+
 ```json
 {
   "type": "https://calcurve.dev/problems/too-few-standards",
   "title": "Calibration failed QC",
   "status": 422,
   "detail": "At least 3 standards are required, got 2",
+  "instance": "/api/v1/calibrations",
   "flags": [{"code": "TOO_FEW_STANDARDS", "severity": "ERROR", "message": "At least 3 standards are required, got 2"}]
 }
 ```
